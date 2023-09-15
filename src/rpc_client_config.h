@@ -1,3 +1,6 @@
+/* Copyright (c) Microsoft Corporation. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
 #ifndef RPC_CLIENT_CONFIG_H
 #define RPC_CLIENT_CONFIG_H
 

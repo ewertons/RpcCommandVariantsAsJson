@@ -1,0 +1,13 @@
+diff --git a/sdk/inc/azure/core/az_mqtt5_rpc.h b/sdk/inc/azure/core/az_mqtt5_rpc.h
+index abc1397e..00243e57 100644
+--- a/sdk/inc/azure/core/az_mqtt5_rpc.h
++++ b/sdk/inc/azure/core/az_mqtt5_rpc.h
+@@ -20,6 +20,8 @@
+ 
+ #include <azure/core/_az_cfg_prefix.h>
+ 
++#include "mosquitto.h"
++
+ /**
+  * @brief The default timeout in seconds for subscribing/publishing.
+  */
