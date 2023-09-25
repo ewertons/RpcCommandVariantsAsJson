@@ -53,10 +53,12 @@ void azure_rpc_platform_deinitialize()
   }
 }
 
-AZ_NODISCARD int azure_rpc_client_initialize(azure_rpc_client_t* client, azure_rpc_client_config_t config)
+AZ_NODISCARD int azure_rpc_client_initialize(azure_rpc_client_t* client, const azure_rpc_client_config_t config)
 {
   // TODO: preconditions.
   (void)memset(client, 0, sizeof(azure_rpc_client_t));
+
+  client->config = config;
 
   client->connection_context = az_context_create_with_expiration(
     &az_context_application, config.connection_context.expiration);
@@ -66,12 +68,63 @@ AZ_NODISCARD int azure_rpc_client_initialize(azure_rpc_client_t* client, azure_r
   LOG_AND_EXIT_IF_FAILED(az_mqtt5_connection_init(
     &client->mqtt_connection, &client->connection_context, &client->mqtt5, mqtt_callback, &config.connection_options));
 
+  LOG_AND_EXIT_IF_FAILED(az_mqtt5_property_bag_init(&client->property_bag, &client->mqtt5, &client->mosq_prop));
+
+  LOG_AND_EXIT_IF_FAILED(az_rpc_client_policy_init(
+      &client->rpc_client_policy,
+      &client->rpc_client,
+      &client->mqtt_connection,
+      client->property_bag,
+      config.connection_options.client_id_buffer,
+      config.model_id,
+      config.command_name,
+      config.response_topic_buffer,
+      config.request_topic_buffer,
+      config.subscription_topic_buffer,
+      NULL));
+
   return 0;
+}
+
+AZ_NODISCARD int azure_rpc_client_start(azure_rpc_client_t* client)
+{
+    LOG_AND_EXIT_IF_FAILED(az_mqtt5_connection_open(&client->mqtt_connection));
+
+    // TODO: remove this comment. Originally this call was inside the mqtt callback. Search for 454567 for reference.
+    LOG_AND_EXIT_IF_FAILED(az_mqtt5_rpc_client_subscribe_begin(&client->rpc_client_policy));
+
+    return 0;
+}
+
+AZ_NODISCARD int azure_rpc_client_invoke(azure_rpc_client_t* client, az_span server_client_id, az_span correlation_id, az_span payload, az_span content_type)
+{
+    az_mqtt5_rpc_client_invoke_req_event_data command_data
+        = { .correlation_id = correlation_id,
+            .content_type = content_type,
+            .rpc_server_client_id = server_client_id,
+            .request_payload = payload };
+
+    az_result rc = az_mqtt5_rpc_client_invoke_begin(&client->rpc_client_policy, &command_data);
+
+    if (az_result_failed(rc))
+    {
+      printf(
+          "Failed to invoke command '%*.s' with rc: 0x%03x\n",
+          az_span_size(correlation_id),
+          az_span_ptr(correlation_id),
+          rc);
+      return __LINE__;
+    }
+
+    return 0;
 }
 
 void azure_rpc_client_deinitialize(azure_rpc_client_t* client)
 {
-  (void)client;
+    (void)(az_mqtt5_connection_close(&client->mqtt_connection));
+    mosquitto_loop_stop(client->mosquitto_client, false);
+    mosquitto_destroy(client->mosquitto_client);
+    mosquitto_property_free_all(&client->mosq_prop);
 }
 
 // Required by platform/az_mqtt5_mosquitto
@@ -91,13 +144,15 @@ az_result mqtt_callback(az_mqtt5_connection* client, az_event event)
 {
   (void)client;
 //   az_app_log_callback(event.type, AZ_SPAN_FROM_STR("APP/callback"));
+
   switch (event.type)
   {
     case AZ_MQTT5_EVENT_CONNECT_RSP:
     {
     //   az_mqtt5_connack_data* connack_data = (az_mqtt5_connack_data*)event.data;
     //   printf(LOG_APP "CONNACK: %d\n", connack_data->connack_reason);
-    //   LOG_AND_EXIT_IF_FAILED(az_mqtt5_rpc_client_subscribe_begin(&rpc_client_policy));
+    // TODO: remove this comment: reference 454567
+      // LOG_AND_EXIT_IF_FAILED(az_mqtt5_rpc_client_subscribe_begin(&rpc_client_policy));
       break;
     }
 

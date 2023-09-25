@@ -19,8 +19,8 @@
 
 #define CLIENT_CERTIFICATE_KEY_PATH "<path to cert key file>"
 
-static const az_span command_name = AZ_SPAN_LITERAL_FROM_STR("unlock");
-static const az_span server_client_id = AZ_SPAN_LITERAL_FROM_STR("vehicle03");
-static const az_span content_type = AZ_SPAN_LITERAL_FROM_STR("application/json");
+#define COMMAND_NAME "unlock"
+
+#define SERVER_CLIENT_ID "vehicle03"
 
 #endif // RPC_CLIENT_CONFIG_H

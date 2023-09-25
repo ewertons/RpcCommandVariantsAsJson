@@ -49,6 +49,10 @@ int main(int argc, char* argv[])
     azure_rpc_client_config.connection_options.client_certificates[0] =
         (az_mqtt5_x509_client_certificate){ .cert = AZ_SPAN_FROM_STR(CLIENT_CERTIFICATE_PATH), .key = AZ_SPAN_FROM_STR(CLIENT_CERTIFICATE_KEY_PATH) };
     azure_rpc_client_config.model_id = AZ_SPAN_FROM_STR(MODEL_ID);
+    azure_rpc_client_config.command_name = AZ_SPAN_FROM_STR(COMMAND_NAME);
+    azure_rpc_client_config.response_topic_buffer = AZ_SPAN_FROM_BUFFER(response_topic_buffer);
+    azure_rpc_client_config.request_topic_buffer = AZ_SPAN_FROM_BUFFER(request_topic_buffer);
+    azure_rpc_client_config.subscription_topic_buffer = AZ_SPAN_FROM_BUFFER(subscription_topic_buffer);
 
     if (azure_rpc_platform_initialize() != 0)
     {
@@ -59,7 +63,24 @@ int main(int argc, char* argv[])
     if (azure_rpc_client_initialize(&azure_rpc_client, azure_rpc_client_config) != 0)
     {
         printf("Failed initializing Azure RPC Client\n");
-        return __LINE__;        
+        return __LINE__;
+    }
+
+    if (azure_rpc_client_start(&azure_rpc_client) != 0)
+    {
+        printf("Failed starting Azure RPC Client\n");
+        return __LINE__;
+    }
+
+    az_span server_client_id = AZ_SPAN_LITERAL_FROM_STR(SERVER_CLIENT_ID);  
+    az_span correlation_id = AZ_SPAN_LITERAL_FROM_STR("12345");
+    az_span request_payload = AZ_SPAN_LITERAL_FROM_STR("{ \"component\": \"wifi\", \"action\": 3 }");
+    az_span request_payload_content_type = AZ_SPAN_LITERAL_FROM_STR("application/json");
+
+    if (azure_rpc_client_invoke(&azure_rpc_client, server_client_id, correlation_id, request_payload, request_payload_content_type) != 0)
+    {
+        printf("Failed starting Azure RPC Client\n");
+        return __LINE__;
     }
 
     azure_rpc_client_deinitialize(&azure_rpc_client);
