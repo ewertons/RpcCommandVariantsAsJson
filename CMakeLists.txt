@@ -4,7 +4,7 @@ project(RpcCommandVariantsAsJson LANGUAGES C)
 
 set(CMAKE_C_STANDARD 99)
 
-add_compile_definitions(TRANSPORT_MOSQUITTO)
+add_compile_definitions(TRANSPORT_MOSQUITTO PLATFORM_POSIX)
 
 add_subdirectory(deps)
 add_subdirectory(src)
