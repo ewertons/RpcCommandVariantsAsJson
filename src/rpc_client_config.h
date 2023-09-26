@@ -13,14 +13,19 @@
 
 #define USERNAME "mobile-app"
 
-#define HOSTNAME "<hostname>"
+#define HOSTNAME "localhost"
 
-#define CLIENT_CERTIFICATE_PATH "<path to cert pem file>"
+#define CLIENT_CERTIFICATE_PATH "/home/ewertons/code/azure-sdk-for-c-hfsm/cmake/sdk/samples/core/mobile-app.pem"
 
-#define CLIENT_CERTIFICATE_KEY_PATH "<path to cert key file>"
+#define CLIENT_CERTIFICATE_KEY_PATH "/home/ewertons/code/azure-sdk-for-c-hfsm/cmake/sdk/samples/core/mobile-app.key"
 
 #define COMMAND_NAME "unlock"
 
 #define SERVER_CLIENT_ID "vehicle03"
 
+#define SUBSCRIPTION_TOPIC_FORMAT "vehicles/{serviceId}/commands/{executorId}/{name}/__for_{invokerId}"
+
+#define REQUEST_TOPIC_FORMAT "vehicles/{serviceId}/commands/{executorId}/{name}"
+
 #endif // RPC_CLIENT_CONFIG_H
+ 

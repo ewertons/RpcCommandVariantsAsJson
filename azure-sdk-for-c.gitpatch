@@ -1,0 +1,96 @@
+diff --git a/sdk/inc/azure/core/az_mqtt5_connection.h b/sdk/inc/azure/core/az_mqtt5_connection.h
+index f707a132..6d27d16c 100644
+--- a/sdk/inc/azure/core/az_mqtt5_connection.h
++++ b/sdk/inc/azure/core/az_mqtt5_connection.h
+@@ -64,7 +64,7 @@ enum az_event_type_mqtt5_connection
+  * @brief Callback for MQTT 5 connection events.
+  *
+  */
+-typedef az_result (*az_mqtt5_connection_callback)(az_mqtt5_connection* client, az_event event);
++typedef az_result (*az_mqtt5_connection_callback)(az_mqtt5_connection* client, az_event event, const void* event_callback_context);
+ 
+ /**
+  * @brief MQTT 5 connection options.
+@@ -154,6 +154,12 @@ struct az_mqtt5_connection
+      */
+     az_mqtt5_connection_callback event_callback;
+ 
++    /**
++     * @brief Context for MQTT 5 connection events callback.
++     *
++     */
++    const void* event_callback_context;
++
+     /**
+      * @brief Options for the MQTT 5 connection.
+      *
+@@ -183,7 +189,8 @@ AZ_NODISCARD az_result az_mqtt5_connection_init(
+     az_context* context,
+     az_mqtt5* mqtt_client,
+     az_mqtt5_connection_callback event_callback,
+-    az_mqtt5_connection_options* options);
++    az_mqtt5_connection_options* options,
++    const void* event_callback_context);
+ 
+ /**
+  * @brief Opens the connection to the broker.
+@@ -222,7 +229,7 @@ AZ_INLINE az_result _az_mqtt5_connection_api_callback(az_mqtt5_connection* clien
+ {
+   if (client->_internal.event_callback != NULL)
+   {
+-    _az_RETURN_IF_FAILED(client->_internal.event_callback(client, event));
++    _az_RETURN_IF_FAILED(client->_internal.event_callback(client, event, client->_internal.event_callback_context));
+   }
+ 
+   return AZ_OK;
+diff --git a/sdk/inc/azure/core/az_mqtt5_rpc.h b/sdk/inc/azure/core/az_mqtt5_rpc.h
+index 470729c8..cc4cb406 100644
+--- a/sdk/inc/azure/core/az_mqtt5_rpc.h
++++ b/sdk/inc/azure/core/az_mqtt5_rpc.h
+@@ -20,6 +20,8 @@
+ 
+ #include <azure/core/_az_cfg_prefix.h>
+ 
++#include "mosquitto.h"
++
+ /**
+  * @brief The default timeout in seconds for subscribing/publishing.
+  */
+diff --git a/sdk/src/azure/core/az_mqtt5_connection.c b/sdk/src/azure/core/az_mqtt5_connection.c
+index 2f7c147a..28c14367 100644
+--- a/sdk/src/azure/core/az_mqtt5_connection.c
++++ b/sdk/src/azure/core/az_mqtt5_connection.c
+@@ -28,7 +28,8 @@ AZ_NODISCARD az_result az_mqtt5_connection_init(
+     az_context* context,
+     az_mqtt5* mqtt_client,
+     az_mqtt5_connection_callback event_callback,
+-    az_mqtt5_connection_options* options)
++    az_mqtt5_connection_options* options,
++    const void* event_callback_context)
+ {
+   _az_PRECONDITION_NOT_NULL(client);
+   _az_PRECONDITION_NOT_NULL(mqtt_client);
+@@ -36,6 +37,7 @@ AZ_NODISCARD az_result az_mqtt5_connection_init(
+ 
+   client->_internal.options = options == NULL ? az_mqtt5_connection_options_default() : *options;
+   client->_internal.event_callback = event_callback;
++  client->_internal.event_callback_context = event_callback_context;
+ 
+   if (!client->_internal.options.disable_sdk_connection_management)
+   {
+diff --git a/sdk/src/azure/core/az_mqtt5_rpc_client_hfsm.c b/sdk/src/azure/core/az_mqtt5_rpc_client_hfsm.c
+index 407271d7..f8843ceb 100644
+--- a/sdk/src/azure/core/az_mqtt5_rpc_client_hfsm.c
++++ b/sdk/src/azure/core/az_mqtt5_rpc_client_hfsm.c
+@@ -583,6 +583,11 @@ static az_result ready(az_event_policy* me, az_event event)
+         .properties = &this_policy->_internal.property_bag,
+       };
+ 
++      if (az_span_size(this_policy->_internal.pending_pub_correlation_id) < az_span_size(event_data->correlation_id))
++      {
++        return AZ_ERROR_NOT_ENOUGH_SPACE;
++      }
++
+       az_span_copy(this_policy->_internal.pending_pub_correlation_id, event_data->correlation_id);
+       _az_RETURN_IF_FAILED(_az_hfsm_transition_substate((_az_hfsm*)me, ready, publishing));
+       // send publish

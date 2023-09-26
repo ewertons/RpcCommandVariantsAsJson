@@ -3,7 +3,10 @@
 
 #include "azure_rpc_client.h"
 
+#include <azure/az_core.h>
 #include <azure/core/az_log.h>
+#include <azure/core/az_mqtt5_rpc.h>
+#include <azure/core/az_mqtt5_rpc_client.h>
 
 #include "mosquitto.h"
 
@@ -22,13 +25,14 @@
     }                                                                      \
   } while (0)
 
-az_result mqtt_callback(az_mqtt5_connection* client, az_event event);
+az_result mqtt_callback(az_mqtt5_connection* client, az_event event, const void* context);
 
 AZ_NODISCARD azure_rpc_client_config_t azure_rpc_client_config_get_default()
 {
   return (azure_rpc_client_config_t) {
     .connection_context.expiration = az_context_get_expiration(&az_context_application),
-    .connection_options = az_mqtt5_connection_options_default()
+    .connection_options = az_mqtt5_connection_options_default(),
+    .client_codec_options = az_mqtt5_rpc_client_codec_options_default()
   };
 }
 
@@ -53,7 +57,7 @@ void azure_rpc_platform_deinitialize()
   }
 }
 
-AZ_NODISCARD int azure_rpc_client_initialize(azure_rpc_client_t* client, const azure_rpc_client_config_t config)
+AZ_NODISCARD int azure_rpc_client_initialize(azure_rpc_client_t* client, azure_rpc_client_config_t config)
 {
   // TODO: preconditions.
   (void)memset(client, 0, sizeof(azure_rpc_client_t));
@@ -66,13 +70,13 @@ AZ_NODISCARD int azure_rpc_client_initialize(azure_rpc_client_t* client, const a
   LOG_AND_EXIT_IF_FAILED(az_mqtt5_init(&client->mqtt5, &client->mosquitto_client, NULL));
 
   LOG_AND_EXIT_IF_FAILED(az_mqtt5_connection_init(
-    &client->mqtt_connection, &client->connection_context, &client->mqtt5, mqtt_callback, &config.connection_options));
+    &client->mqtt_connection, &client->connection_context, &client->mqtt5, mqtt_callback, &config.connection_options, client));
 
   LOG_AND_EXIT_IF_FAILED(az_mqtt5_property_bag_init(&client->property_bag, &client->mqtt5, &client->mosq_prop));
 
-  LOG_AND_EXIT_IF_FAILED(az_rpc_client_policy_init(
-      &client->rpc_client_policy,
+  LOG_AND_EXIT_IF_FAILED(az_mqtt5_rpc_client_init(
       &client->rpc_client,
+      &client->rpc_client_codec,
       &client->mqtt_connection,
       client->property_bag,
       config.connection_options.client_id_buffer,
@@ -81,7 +85,8 @@ AZ_NODISCARD int azure_rpc_client_initialize(azure_rpc_client_t* client, const a
       config.response_topic_buffer,
       config.request_topic_buffer,
       config.subscription_topic_buffer,
-      NULL));
+      config.correlation_id_buffer, // TODO: check if we can remove this.
+      &config.client_codec_options));
 
   return 0;
 }
@@ -90,26 +95,25 @@ AZ_NODISCARD int azure_rpc_client_start(azure_rpc_client_t* client)
 {
     LOG_AND_EXIT_IF_FAILED(az_mqtt5_connection_open(&client->mqtt_connection));
 
-    // TODO: remove this comment. Originally this call was inside the mqtt callback. Search for 454567 for reference.
-    LOG_AND_EXIT_IF_FAILED(az_mqtt5_rpc_client_subscribe_begin(&client->rpc_client_policy));
-
     return 0;
 }
 
 AZ_NODISCARD int azure_rpc_client_invoke(azure_rpc_client_t* client, az_span server_client_id, az_span correlation_id, az_span payload, az_span content_type)
 {
+    if (!client->connection_open) return __LINE__;
+
     az_mqtt5_rpc_client_invoke_req_event_data command_data
         = { .correlation_id = correlation_id,
             .content_type = content_type,
             .rpc_server_client_id = server_client_id,
             .request_payload = payload };
 
-    az_result rc = az_mqtt5_rpc_client_invoke_begin(&client->rpc_client_policy, &command_data);
+    az_result rc = az_mqtt5_rpc_client_invoke_begin(&client->rpc_client, &command_data);
 
     if (az_result_failed(rc))
     {
       printf(
-          "Failed to invoke command '%*.s' with rc: 0x%03x\n",
+          "Failed to invoke command '%.*s' with rc: 0x%03x\n",
           az_span_size(correlation_id),
           az_span_ptr(correlation_id),
           rc);
@@ -140,47 +144,56 @@ void az_platform_critical_error()
  * @brief MQTT client callback function for all clients
  * @note If you add other clients, you can add handling for their events here
  */
-az_result mqtt_callback(az_mqtt5_connection* client, az_event event)
+az_result mqtt_callback(az_mqtt5_connection* connection, az_event event, const void* context)
 {
-  (void)client;
-//   az_app_log_callback(event.type, AZ_SPAN_FROM_STR("APP/callback"));
+  (void)connection;
+  azure_rpc_client_t* client = (azure_rpc_client_t*)context;
+  // az_app_log_callback(event.type, AZ_SPAN_FROM_STR("APP/callback"));
 
   switch (event.type)
   {
     case AZ_MQTT5_EVENT_CONNECT_RSP:
     {
-    //   az_mqtt5_connack_data* connack_data = (az_mqtt5_connack_data*)event.data;
-    //   printf(LOG_APP "CONNACK: %d\n", connack_data->connack_reason);
+      az_mqtt5_connack_data* connack_data = (az_mqtt5_connack_data*)event.data;
+      printf("CONNACK: %d\n", connack_data->connack_reason);
     // TODO: remove this comment: reference 454567
-      // LOG_AND_EXIT_IF_FAILED(az_mqtt5_rpc_client_subscribe_begin(&rpc_client_policy));
+      LOG_AND_EXIT_IF_FAILED(az_mqtt5_rpc_client_subscribe_begin(&client->rpc_client));
       break;
     }
 
     case AZ_MQTT5_EVENT_DISCONNECT_RSP:
     {
-    //   printf(LOG_APP "DISCONNECTED\n");
+      printf("DISCONNECTED\n");
+      client->connection_open = false;
       break;
     }
 
     case AZ_MQTT5_EVENT_RPC_CLIENT_READY_IND:
     {
-    //   az_mqtt5_rpc_client* ready_rpc_client = (az_mqtt5_rpc_client*)event.data;
-    //   if (ready_rpc_client == &rpc_client)
-    //   {
-    //     printf(LOG_APP "RPC Client Ready\n");
-    //     // invoke any queued requests that couldn't be sent earlier?
-    //   }
-    //   else
-    //   {
-    //     printf(LOG_APP_ERROR "Unknown client ready\n");
-    //   }
+      az_mqtt5_rpc_client_codec* ready_rpc_client_codec = (az_mqtt5_rpc_client_codec*)event.data;
+
+      if (ready_rpc_client_codec == &client->rpc_client_codec)
+      {
+        printf("RPC Client Ready\n");
+        // invoke any queued requests that couldn't be sent earlier?
+        client->connection_open = true;
+      }
+      else
+      {
+        printf("Unknown client ready\n");
+      }
       break;
     }
 
     case AZ_MQTT5_EVENT_RPC_CLIENT_RSP:
     {
-    //   az_mqtt5_rpc_client_rsp_event_data* recv_data
-    //       = (az_mqtt5_rpc_client_rsp_event_data*)event.data;
+      az_mqtt5_rpc_client_rsp_event_data* recv_data
+          = (az_mqtt5_rpc_client_rsp_event_data*)event.data;
+      printf(
+          "Command response received %s: %s\n",
+          az_span_ptr(recv_data->correlation_id),
+          az_span_ptr(recv_data->response_payload));
+
     //   if (is_command_pending(pending_commands, recv_data->correlation_id))
     //   {
     //     if (recv_data->status != AZ_MQTT5_RPC_STATUS_OK)
@@ -220,9 +233,9 @@ az_result mqtt_callback(az_mqtt5_connection* client, az_event event)
 
     case AZ_MQTT5_EVENT_RPC_CLIENT_ERROR_RSP:
     {
-    //   az_mqtt5_rpc_client_rsp_event_data* recv_data
-    //       = (az_mqtt5_rpc_client_rsp_event_data*)event.data;
-    //   printf(LOG_APP_ERROR "Broker/Client failure for command ");
+      az_mqtt5_rpc_client_rsp_event_data* recv_data
+          = (az_mqtt5_rpc_client_rsp_event_data*)event.data;
+      printf("Broker/Client failure for command ");
     //   print_correlation_id(recv_data->correlation_id);
     //   printf(": %s Status: %d\n", az_span_ptr(recv_data->error_message), recv_data->status);
     //   remove_command(&pending_commands, recv_data->correlation_id);
@@ -230,7 +243,7 @@ az_result mqtt_callback(az_mqtt5_connection* client, az_event event)
     }
 
     case AZ_HFSM_EVENT_ERROR:
-      // printf(LOG_APP_ERROR "Error Event\n");
+      printf("Error Event\n");
       // az_platform_critical_error();
       break;
 

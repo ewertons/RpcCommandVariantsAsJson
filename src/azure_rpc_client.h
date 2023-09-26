@@ -30,6 +30,8 @@ typedef struct azure_rpc_client_config_struct
     az_span response_topic_buffer;
     az_span request_topic_buffer;
     az_span subscription_topic_buffer;
+    az_span correlation_id_buffer;
+    az_mqtt5_rpc_client_codec_options client_codec_options;
 } azure_rpc_client_config_t;
 
 typedef struct azure_rpc_client_struct
@@ -43,8 +45,9 @@ typedef struct azure_rpc_client_struct
     az_mqtt5_property_bag property_bag;
     mosquitto_property* mosq_prop;
 
-    az_mqtt5_rpc_client_policy rpc_client_policy;
     az_mqtt5_rpc_client rpc_client;
+    az_mqtt5_rpc_client_codec rpc_client_codec;
+    bool connection_open;
 } azure_rpc_client_t;
 
 AZ_NODISCARD azure_rpc_client_config_t azure_rpc_client_config_get_default();
