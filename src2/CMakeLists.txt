@@ -31,6 +31,7 @@ set(CMAKE_C_STANDARD 99)
 # Azure MQTT5 State Machine RPC Client Sample
 add_executable (mosquitto_rpc_client_sample2
   ${CMAKE_CURRENT_LIST_DIR}/mosquitto_rpc_client_sample.c
+  ${CMAKE_CURRENT_LIST_DIR}/rpc_command_list.c
 )
 
 target_include_directories(mosquitto_rpc_client_sample2

@@ -12,9 +12,9 @@
 
 #define HOSTNAME "localhost"
 
-#define CLIENT_CERTIFICATE_PATH "/home/ewertons/code/azure-sdk-for-c-hfsm/cmake/sdk/samples/core/mobile-app.pem"
+#define CLIENT_CERTIFICATE_PATH "/home/ewertons/code/mosquitto/mobile-app.pem"
 
-#define CLIENT_CERTIFICATE_KEY_PATH "/home/ewertons/code/azure-sdk-for-c-hfsm/cmake/sdk/samples/core/mobile-app.key"
+#define CLIENT_CERTIFICATE_KEY_PATH "/home/ewertons/code/mosquitto/mobile-app.key"
 
 #define COMMAND_NAME "unlock"
 

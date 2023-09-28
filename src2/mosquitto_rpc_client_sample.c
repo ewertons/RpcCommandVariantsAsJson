@@ -13,7 +13,6 @@
 #include <stdlib.h>
 #include <uuid/uuid.h>
 
-#include "rpc_client_pending_commands.h"
 #include <azure/az_core.h>
 #include <azure/core/az_log.h>
 #include <azure/core/az_mqtt5_rpc.h>
@@ -21,6 +20,8 @@
 
 #include "vehicle03_unlock.h"
 #include "sample_config.h"
+
+#include "rpc_command_list.h"
 
 // User-defined parameters
 static const az_span cert_path1 = AZ_SPAN_LITERAL_FROM_STR(CLIENT_CERTIFICATE_PATH);
@@ -35,22 +36,19 @@ static const az_span hostname = AZ_SPAN_LITERAL_FROM_STR(HOSTNAME);
 // static const az_span hostname = AZ_SPAN_LITERAL_FROM_STR("<hostname>");
 static const az_span command_name = AZ_SPAN_LITERAL_FROM_STR("unlock");
 static const az_span model_id = AZ_SPAN_LITERAL_FROM_STR("dtmi:rpc:samples:vehicle;1");
-static const az_span server_client_id = AZ_SPAN_LITERAL_FROM_STR("vehicle03");
 static const az_span content_type = AZ_SPAN_LITERAL_FROM_STR("application/json");
 static const az_span subscription_topic_format = AZ_SPAN_LITERAL_FROM_STR(
     "vehicles/{serviceId}/commands/{executorId}/{name}/__for_{invokerId}");
 static const az_span request_topic_format
     = AZ_SPAN_LITERAL_FROM_STR("vehicles/{serviceId}/commands/{executorId}/{name}");
 
+rpc_command_list_define(5);
+
 // Static memory allocation.
 static char response_topic_buffer[256];
 static char request_topic_buffer[256];
 static char subscription_topic_buffer[256];
 static uint8_t correlation_id_buffer[AZ_MQTT5_RPC_CORRELATION_ID_LENGTH];
-
-static uint8_t correlation_id_buffers[RPC_CLIENT_MAX_PENDING_COMMANDS]
-                                     [AZ_MQTT5_RPC_CORRELATION_ID_LENGTH];
-static pending_commands_array pending_commands;
 
 // State variables
 static az_mqtt5_connection mqtt_connection;
@@ -63,8 +61,6 @@ volatile bool sample_finished = false;
 
 az_result mqtt_callback(az_mqtt5_connection* client, az_event event, const void* context);
 void handle_response(az_span response_payload);
-az_result invoke_begin(az_span invoke_command_name, az_span payload);
-void remove_expired_commands();
 
 void az_platform_critical_error()
 {
@@ -124,7 +120,8 @@ az_result mqtt_callback(az_mqtt5_connection* client, az_event event, const void*
     {
       az_mqtt5_rpc_client_rsp_event_data* recv_data
           = (az_mqtt5_rpc_client_rsp_event_data*)event.data;
-      if (is_command_pending(pending_commands, recv_data->correlation_id))
+
+      if (rpc_command_list_contains(recv_data->correlation_id))
       {
         if (recv_data->status != AZ_MQTT5_RPC_STATUS_OK)
         {
@@ -148,7 +145,8 @@ az_result mqtt_callback(az_mqtt5_connection* client, az_event event, const void*
             handle_response(recv_data->response_payload);
           }
         }
-        remove_command(&pending_commands, recv_data->correlation_id);
+
+        rpc_command_list_remove(recv_data->correlation_id);
       }
       else
       {
@@ -166,7 +164,8 @@ az_result mqtt_callback(az_mqtt5_connection* client, az_event event, const void*
       printf(LOG_APP_ERROR "Broker/Client failure for command ");
       print_correlation_id(recv_data->correlation_id);
       printf(": %s Status: %d\n", az_span_ptr(recv_data->error_message), recv_data->status);
-      remove_command(&pending_commands, recv_data->correlation_id);
+      rpc_command_list_remove(recv_data->correlation_id);
+
       break;
     }
 
@@ -181,59 +180,17 @@ az_result mqtt_callback(az_mqtt5_connection* client, az_event event, const void*
   return AZ_OK;
 }
 
-/**
- * @brief Removes any expired commands from the pending_commands array
- * @note Even if a command has expired, if we get a response for it, we will still receive an event
- * with the results in the mqtt_callback
- */
-void remove_expired_commands()
+void expired_rpc_command_removed_callback(rpc_command_item_t* item)
 {
-  pending_command* expired_command = get_first_expired_command(pending_commands);
-  while (expired_command != NULL)
-  {
-    printf(LOG_APP_ERROR "command ");
-    print_correlation_id(expired_command->correlation_id);
-    printf(" expired\n");
-    az_result ret = remove_command(&pending_commands, expired_command->correlation_id);
-    if (ret != AZ_OK)
-    {
-      printf(LOG_APP_ERROR "Expired command not a pending command\n");
-    }
-    expired_command = get_first_expired_command(pending_commands);
-  }
-}
-
-az_result invoke_begin(az_span invoke_command_name, az_span payload)
-{
-  uuid_t new_uuid;
-  uuid_generate(new_uuid);
-  az_mqtt5_rpc_client_invoke_req_event_data command_data
-      = { .correlation_id = az_span_create((uint8_t*)new_uuid, AZ_MQTT5_RPC_CORRELATION_ID_LENGTH),
-          .content_type = content_type,
-          .rpc_server_client_id = server_client_id,
-          .command_name = invoke_command_name,
-          .request_payload = payload };
-  LOG_AND_EXIT_IF_FAILED(add_command(
-      &pending_commands,
-      command_data.correlation_id,
-      invoke_command_name,
-      CLIENT_COMMAND_TIMEOUT_MS));
-  az_result rc = az_mqtt5_rpc_client_invoke_begin(&rpc_client, &command_data);
-  if (az_result_failed(rc))
-  {
-    printf(
-        LOG_APP_ERROR "Failed to invoke command '%s' with rc: %s\n",
-        az_span_ptr(invoke_command_name),
-        az_result_to_string(rc));
-    remove_command(&pending_commands, command_data.correlation_id);
-  }
-  return AZ_OK;
+  printf("command %.*s expired\n", (int)sizeof(item->correlation_id), item->correlation_id);
 }
 
 int main(int argc, char* argv[])
 {
   (void)argc;
   (void)argv;
+
+  rpc_command_list_reset();
 
   /* Required before calling other mosquitto functions */
   if (mosquitto_lib_init() != MOSQ_ERR_SUCCESS)
@@ -293,7 +250,6 @@ int main(int argc, char* argv[])
       AZ_SPAN_FROM_BUFFER(correlation_id_buffer),
       &client_codec_options));
 
-  LOG_AND_EXIT_IF_FAILED(pending_commands_array_init(&pending_commands, correlation_id_buffers));
   LOG_AND_EXIT_IF_FAILED(az_mqtt5_connection_open(&mqtt_connection));
 
   // infinite execution loop
@@ -302,8 +258,7 @@ int main(int argc, char* argv[])
     printf(LOG_APP "Waiting...\r");
     fflush(stdout);
 
-    // remove any expired commands from the client
-    remove_expired_commands();
+    rpc_command_list_remove_expired(expired_rpc_command_removed_callback);
 
     // invokes a command every 15 seconds. This cadence/how it is triggered should be customized for
     // your solution.
@@ -312,20 +267,24 @@ int main(int argc, char* argv[])
       uuid_t new_uuid;
       uuid_generate(new_uuid);
 
-      LOG_AND_EXIT_IF_FAILED(add_command(
-          &pending_commands,
-          command_data.correlation_id,
-          invoke_command_name,
-          CLIENT_COMMAND_TIMEOUT_MS));
-      
-      az_result vehicle03_unlock_begin_result =
-        vehicle03_unlock_begin(&rpc_client, (const uint8_t*)new_uuid, sizeof(uuid_t), 1691530585198, "mobile-app", strlen("mobile-app"));      
+      rpc_command_item_t* rpc_command = rpc_command_list_add(CLIENT_COMMAND_TIMEOUT_MS);
 
-      if (az_result_failed(vehicle03_unlock_begin_result))
-      {
-        printf("Failed invoking vehicle03/unlock");
+      if (rpc_command != NULL)
+      {        
+        az_result vehicle03_unlock_begin_result =
+          vehicle03_unlock_begin(
+            &rpc_client,
+            &rpc_command->command_data,
+            (const uint8_t*)rpc_command->correlation_id, sizeof(uuid_t),
+            1691530585198, "mobile-app", strlen("mobile-app"));
+
+        if (az_result_failed(vehicle03_unlock_begin_result))
+        {
+          printf("Failed invoking vehicle03/unlock");
+        }
       }
     }
+
     LOG_AND_EXIT_IF_FAILED(az_platform_sleep_msec(1000));
   }
 
