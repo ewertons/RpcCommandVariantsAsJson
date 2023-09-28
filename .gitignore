@@ -1,0 +1,4 @@
+build/
+.vscode/
+deps/vcpkg
+deps/azure-sdk-for-c/
